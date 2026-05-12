@@ -124,6 +124,102 @@ pytest --cov=app --cov-report=html           # HTML en htmlcov/
 
 Los tests **no requieren broker Kafka ni base de datos**: monkeypatchean `aiokafka.AIOKafkaConsumer` con un fake y mockean `PaymentRepository` en los tests del handler. Cobertura actual: 93.63%.
 
+## Despliegue (CI/CD)
+
+Pipeline en [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). En cada push a `main` (o disparo manual desde la pestaña Actions):
+
+1. **Job `test`** — instala dependencias y corre `pytest`, que con el `addopts` del [`pytest.ini`](pytest.ini) aplica `--cov=app --cov-fail-under=80`. Si la cobertura baja del 80% el job falla y nada se despliega.
+2. **Job `deploy`** (solo si `test` pasa) — autentica contra GCP, hace `docker build` + push a Artifact Registry, y luego `gcloud run deploy` con flags pensadas para un worker en background.
+
+### Flags importantes del deploy
+
+Estas se aplican incondicionalmente porque son intrínsecas a este worker:
+
+| Flag                          | Por qué                                                                 |
+|-------------------------------|-------------------------------------------------------------------------|
+| `--no-cpu-throttling`         | El consume loop sigue procesando entre requests. Sin esto Cloud Run pausa la CPU cuando no hay tráfico HTTP y el worker se "congela". |
+| `--min-instances=1` (default) | Para que el worker no escale a cero mientras hay mensajes que consumir. Override con `vars.MIN_INSTANCES`. |
+| `--max-instances=3` (default) | Techo conservador para no levantar más consumers de los necesarios. Override con `vars.MAX_INSTANCES`. |
+| `--allow-unauthenticated`     | Para que los health checks de Cloud Run lleguen a `/health`. Si tu política lo prohíbe, cambia el workflow a `--no-allow-unauthenticated`. |
+| `--port=8000`                 | Puerto en el que FastAPI atiende `/health` y `/health/consumer`.        |
+
+### GitHub Actions Variables
+
+Configurar en `Settings → Secrets and variables → Actions → Variables` (scope **Repository**):
+
+| Variable                       | Ejemplo / propósito                                                       |
+|--------------------------------|---------------------------------------------------------------------------|
+| `GCP_PROJECT_ID`               | `gen-lang-client-0930444414`                                              |
+| `GCP_REGION`                   | `us-central1`                                                             |
+| `AR_REPOSITORY`                | Repo en Artifact Registry donde se empuja la imagen                       |
+| `SERVICE_NAME`                 | `payments-worker` (distinto al del producer)                              |
+| `RUNTIME_SERVICE_ACCOUNT`      | `payments-worker-runtime@…iam.gserviceaccount.com`                        |
+| `MIN_INSTANCES`                | opcional — default `1`                                                    |
+| `MAX_INSTANCES`                | opcional — default `3`                                                    |
+| `VPC_NETWORK`                  | `travelhub-vpc` (si Kafka/SQL son IP privada)                             |
+| `VPC_SUBNET`                   | `subnet-services` (misma región que Cloud Run)                            |
+| `VPC_CONNECTOR`                | alternativa a `VPC_NETWORK`+`VPC_SUBNET` (Serverless VPC Access)          |
+| `CLOUD_SQL_INSTANCE`           | `PROJECT:REGION:INSTANCE` (si conectas a Cloud SQL via socket Unix)       |
+| `KAFKA_ENABLED`                | `true` en producción                                                      |
+| `KAFKA_BOOTSTRAP_SERVERS`      | `10.10.3.3:9092`                                                          |
+| `KAFKA_TOPIC`                  | `payments-queue` — **debe coincidir con el del producer**                 |
+| `KAFKA_GROUP_ID`               | `miso-travelhub-worker-payments`                                          |
+| `KAFKA_CLIENT_ID`              | opcional                                                                  |
+| `KAFKA_AUTO_OFFSET_RESET`      | `earliest`                                                                |
+| `KAFKA_SECURITY_PROTOCOL`      | `PLAINTEXT` o `SASL_*`                                                    |
+| `KAFKA_SASL_MECHANISM`         | si aplica                                                                 |
+| `KAFKA_SASL_USERNAME`          | si aplica                                                                 |
+| `KAFKA_SASL_PASSWORD_SECRET`   | **nombre del secreto** en Secret Manager (no el password en claro)        |
+
+### GitHub Actions Secrets
+
+| Secret           | Propósito                                                              |
+|------------------|------------------------------------------------------------------------|
+| `GCP_SA_KEY`     | JSON del SA con `roles/run.admin`, `roles/iam.serviceAccountUser`, `roles/artifactregistry.writer`, `roles/storage.admin` |
+
+`DATABASE_URL` se monta como secret de Cloud Run (`DATABASE_URL=DATABASE_URL:latest` en el workflow) — vive en Secret Manager, no en GitHub.
+
+### Setup IAM en GCP (una sola vez)
+
+```bash
+PROJECT=gen-lang-client-0930444414
+RUNTIME_SA=payments-worker-runtime@${PROJECT}.iam.gserviceaccount.com
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
+
+# Crear el SA del runtime si aún no existe
+gcloud iam service-accounts create payments-worker-runtime --project=$PROJECT
+
+# Acceso al secret DATABASE_URL (compartido con el producer)
+gcloud secrets add-iam-policy-binding DATABASE_URL \
+  --project=$PROJECT \
+  --member=serviceAccount:$RUNTIME_SA \
+  --role=roles/secretmanager.secretAccessor
+
+# Cloud SQL client (si conectas via Unix socket)
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member=serviceAccount:$RUNTIME_SA \
+  --role=roles/cloudsql.client
+
+# Network user sobre subnet-services para Direct VPC egress
+gcloud compute networks subnets add-iam-policy-binding subnet-services \
+  --region=us-central1 --project=$PROJECT \
+  --member=serviceAccount:$RUNTIME_SA \
+  --role=roles/compute.networkUser
+
+# Y al service agent de Cloud Run — el que más se olvida
+gcloud compute networks subnets add-iam-policy-binding subnet-services \
+  --region=us-central1 --project=$PROJECT \
+  --member="serviceAccount:service-${PROJECT_NUMBER}@serverless-robot-prod.iam.gserviceaccount.com" \
+  --role=roles/compute.networkUser
+```
+
+### Cómo disparar un deploy
+
+- Automático: `git push origin main`.
+- Manual: pestaña **Actions** → workflow **Deploy worker to Cloud Run** → **Run workflow**.
+
+El step **"Debug — show resolved deploy vars"** del job de deploy imprime los valores de cada variable antes del despliegue. Si ves alguna vacía que esperabas, la causa más común es que esté en scope Environment en lugar de Repository.
+
 ## Operación
 
 ### Cold start

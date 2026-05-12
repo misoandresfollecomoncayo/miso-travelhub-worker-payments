@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    environment:
+      APP_ENV: development
+      APP_DEBUG: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app

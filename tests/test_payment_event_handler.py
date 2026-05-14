@@ -119,3 +119,23 @@ async def test_handler_handles_duplicate_path(patch_duplicate_repo, caplog) -> N
     assert len(patch_duplicate_repo) == 1
     messages = [r.getMessage() for r in caplog.records]
     assert any("duplicate" in m for m in messages)
+
+
+async def test_handler_persists_refunded_with_minimal_fields(patch_repo) -> None:
+    """REFUNDED with only message+invoiceId still goes through the repository."""
+    refund = PaymentWebhookPayload(
+        status=PaymentWebhookStatus.REFUNDED,
+        message="Reembolso emitido",
+        invoiceId="INV-9",
+    )
+    factory = FakeSessionFactory()
+    handler = handler_module.build_payment_event_handler(factory)
+
+    await handler(refund)
+
+    assert len(patch_repo) == 1
+    saved = patch_repo[0].calls[0]
+    assert saved.status == PaymentWebhookStatus.REFUNDED
+    assert saved.invoiceId == "INV-9"
+    assert saved.transactionId is None
+    assert saved.amount is None

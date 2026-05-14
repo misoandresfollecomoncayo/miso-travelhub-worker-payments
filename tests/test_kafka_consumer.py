@@ -218,6 +218,35 @@ async def test_stop_is_safe_when_never_started() -> None:
 # --- _consume_loop ----------------------------------------------------------
 
 
+async def test_consume_loop_processes_refunded_with_minimal_payload(
+    fake_kafka,
+) -> None:
+    """A REFUNDED event with only status+message+invoiceId is delivered to the handler."""
+    handled: list = []
+
+    async def handler(payload):
+        handled.append(payload)
+
+    consumer = KafkaPaymentConsumer(_settings(), handler)
+    await consumer.start()
+
+    refund_json = (
+        b'{"status":"REFUNDED","message":"Reembolso emitido","invoiceId":"INV-9"}'
+    )
+    fake_kafka["instance"].messages = [_fake_msg(refund_json, offset=0)]
+
+    await consumer.run()
+
+    assert len(handled) == 1
+    refund = handled[0]
+    assert refund.status.value == "REFUNDED"
+    assert refund.invoiceId == "INV-9"
+    assert refund.transactionId is None
+    assert refund.amount is None
+    assert consumer.processed_count == 1
+    assert consumer.invalid_count == 0
+
+
 async def test_consume_loop_processes_messages_and_commits(fake_kafka) -> None:
     handled: list = []
 

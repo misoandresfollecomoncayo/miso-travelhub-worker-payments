@@ -18,16 +18,31 @@ class PaymentRepository:
     async def create_from_webhook(
         self, payload: PaymentWebhookPayload
     ) -> Payment | None:
-        existing = await self._session.scalar(
-            select(Payment).where(Payment.transaction_id == payload.transactionId)
-        )
-        if existing is not None:
-            logger.info(
-                "payment already persisted tx=%s id=%s",
-                payload.transactionId,
-                existing.id,
+        """Persist a payment event.
+
+        Idempotency rules:
+
+        - When ``transactionId`` is present we look it up first and skip the
+          insert if the row already exists. This protects against Kafka
+          at-least-once retries for the common path (APPROVED/DECLINED/...).
+        - For ``REFUNDED`` events without ``transactionId`` we always insert
+          a new row — there is no natural key to dedupe on. A duplicate
+          delivery from Kafka would therefore produce a duplicate refund
+          row; the operator can clean those up if they appear.
+        """
+        if payload.transactionId is not None:
+            existing = await self._session.scalar(
+                select(Payment).where(
+                    Payment.transaction_id == payload.transactionId
+                )
             )
-            return None
+            if existing is not None:
+                logger.info(
+                    "payment already persisted tx=%s id=%s",
+                    payload.transactionId,
+                    existing.id,
+                )
+                return None
 
         payment = Payment(
             status=payload.status.value,

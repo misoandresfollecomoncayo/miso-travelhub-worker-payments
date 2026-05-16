@@ -8,6 +8,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
 from app.services.kafka_consumer import KafkaPaymentConsumer
+from app.services.notification_client import HttpNotificationClient
 from app.services.payment_event_handler import build_payment_event_handler
 
 logging.basicConfig(
@@ -62,12 +63,36 @@ def _log_kafka_config() -> None:
     )
 
 
+def _log_notification_config() -> None:
+    s = get_settings()
+    if not s.notification_enabled:
+        logger.warning(
+            "Notification client DISABLED (NOTIFICATION_ENABLED=false). "
+            "Booking-paid notifications will be skipped."
+        )
+        return
+    logger.info(
+        "Notification client ENABLED: url=%s path=%s timeout=%ss",
+        s.notification_service_url,
+        s.notification_service_path,
+        s.notification_timeout_seconds,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     session_factory = get_sessionmaker() if settings.database_url else None
+
+    notifier = HttpNotificationClient(settings)
+    try:
+        await notifier.start()
+    except Exception:
+        logger.exception("Notification client failed to start")
+    app.state.notification_client = notifier
+
     handler = (
-        build_payment_event_handler(session_factory)
+        build_payment_event_handler(session_factory, notifier=notifier)
         if session_factory is not None
         else _no_db_handler
     )
@@ -85,6 +110,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await consumer.stop()
+        await notifier.stop()
 
 
 async def _no_db_handler(payload) -> None:  # noqa: ANN001
@@ -115,6 +141,7 @@ def create_app() -> FastAPI:
 
     _log_database_config()
     _log_kafka_config()
+    _log_notification_config()
 
     return app
 

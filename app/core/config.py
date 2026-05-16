@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # Backoff entre reinicios del loop tras un error inesperado.
     kafka_restart_backoff_seconds: float = 5.0
 
+    # Notification service (Cloud Run sibling). When a payment event is
+    # consumed with status=APPROVED we POST {booking_id, status: "PAID"}
+    # to NOTIFICATION_SERVICE_URL + NOTIFICATION_SERVICE_PATH.
+    notification_enabled: bool = False
+    notification_service_url: str = (
+        "https://notification-services-154299161799.us-central1.run.app"
+    )
+    notification_service_path: str = "/api/v1/notifications/send-notification"
+    notification_timeout_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

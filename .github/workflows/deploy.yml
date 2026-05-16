@@ -115,6 +115,7 @@ jobs:
             EMAIL_NOTIFICATION_ENABLED=${{ vars.EMAIL_NOTIFICATION_ENABLED || 'false' }}
             EMAIL_NOTIFICATION_URL=${{ vars.EMAIL_NOTIFICATION_URL || 'https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events' }}
             EMAIL_NOTIFICATION_TIMEOUT_SECONDS=${{ vars.EMAIL_NOTIFICATION_TIMEOUT_SECONDS || '5' }}
+            EMAIL_NOTIFICATION_INTERNAL_TOKEN=${{ secrets.EMAIL_NOTIFICATION_INTERNAL_TOKEN }}
           secrets: |
             DATABASE_URL=DATABASE_URL:latest
             ${{ vars.KAFKA_SASL_PASSWORD_SECRET && format('KAFKA_SASL_PASSWORD={0}:latest', vars.KAFKA_SASL_PASSWORD_SECRET) || '' }}

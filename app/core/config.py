@@ -62,6 +62,10 @@ class Settings(BaseSettings):
         "https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events"
     )
     email_notification_timeout_seconds: float = 5.0
+    # Shared secret sent as the ``x-internal-token`` header so the
+    # notification-services events endpoint can reject requests from
+    # anywhere outside the cluster.
+    email_notification_internal_token: str = ""
 
 
 @lru_cache

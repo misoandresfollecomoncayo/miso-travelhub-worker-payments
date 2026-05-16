@@ -104,6 +104,7 @@ Ver [.env.example](.env.example) para la lista completa.
 | `EMAIL_NOTIFICATION_ENABLED`      | `false`                              | Si `false`, los eventos `payment.completed` (email) se omiten      |
 | `EMAIL_NOTIFICATION_URL`          | `https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events` | URL completa (host + path)         |
 | `EMAIL_NOTIFICATION_TIMEOUT_SECONDS` | `5`                               | Timeout HTTP para la llamada                                       |
+| `EMAIL_NOTIFICATION_INTERNAL_TOKEN`  | —                                 | Shared secret enviado como header `x-internal-token`. Vacío → el receiver rechazará con 401 |
 
 ## Notificación booking-paid
 
@@ -129,6 +130,7 @@ En paralelo a la notificación push, el worker emite un **segundo POST** al endp
 ```
 POST {EMAIL_NOTIFICATION_URL}
 Content-Type: application/json
+x-internal-token: {EMAIL_NOTIFICATION_INTERNAL_TOKEN}
 
 {
   "event_type": "payment.completed",
@@ -237,9 +239,10 @@ Configurar en `Settings → Secrets and variables → Actions → Variables` (sc
 
 ### GitHub Actions Secrets
 
-| Secret           | Propósito                                                              |
-|------------------|------------------------------------------------------------------------|
-| `GCP_SA_KEY`     | JSON del SA con `roles/run.admin`, `roles/iam.serviceAccountUser`, `roles/artifactregistry.writer`, `roles/storage.admin` |
+| Secret                              | Propósito                                                                                                                  |
+|-------------------------------------|----------------------------------------------------------------------------------------------------------------------------|
+| `GCP_SA_KEY`                        | JSON del SA con `roles/run.admin`, `roles/iam.serviceAccountUser`, `roles/artifactregistry.writer`, `roles/storage.admin`  |
+| `EMAIL_NOTIFICATION_INTERNAL_TOKEN` | Shared secret que se envía como header `x-internal-token` al endpoint de eventos del notification-services                |
 
 `DATABASE_URL` se monta como secret de Cloud Run (`DATABASE_URL=DATABASE_URL:latest` en el workflow) — vive en Secret Manager, no en GitHub.
 

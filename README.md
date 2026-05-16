@@ -101,6 +101,9 @@ Ver [.env.example](.env.example) para la lista completa.
 | `NOTIFICATION_SERVICE_URL`        | `https://notification-services-154299161799.us-central1.run.app` | Cloud Run sibling                            |
 | `NOTIFICATION_SERVICE_PATH`       | `/api/v1/notifications/send-notification` |                                                              |
 | `NOTIFICATION_TIMEOUT_SECONDS`    | `5`                                  | Timeout HTTP para la llamada                                       |
+| `EMAIL_NOTIFICATION_ENABLED`      | `false`                              | Si `false`, los eventos `payment.completed` (email) se omiten      |
+| `EMAIL_NOTIFICATION_URL`          | `https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events` | URL completa (host + path)         |
+| `EMAIL_NOTIFICATION_TIMEOUT_SECONDS` | `5`                               | Timeout HTTP para la llamada                                       |
 
 ## Notificación booking-paid
 
@@ -118,6 +121,39 @@ Reglas:
 - Sólo se dispara para `APPROVED`. `DECLINED`, `PENDING`, `FAILED` y `REFUNDED` no notifican.
 - **No** se vuelve a notificar en duplicados (re-entregas de Kafka): el repositorio retorna `None` y se omite la llamada para evitar notificar al usuario dos veces.
 - Es **best-effort**: si el notification service responde 5xx, hay timeout o falla la conexión, se loguea pero el offset igual se commitea — la DB ya tiene el pago como fuente de verdad.
+
+## Notificación payment.completed (email)
+
+En paralelo a la notificación push, el worker emite un **segundo POST** al endpoint de eventos del notification-services para disparar el pipeline de email:
+
+```
+POST {EMAIL_NOTIFICATION_URL}
+Content-Type: application/json
+
+{
+  "event_type": "payment.completed",
+  "user_id": "<viajeroId resuelto desde la tabla reserva>",
+  "payload": {
+    "payment_id": "<transactionId>",
+    "booking_id": "<invoiceId>",
+    "amount": "<amount>",
+    "currency": "<currency>",
+    "provider": "PROVIDER DE PRUEBA"
+  }
+}
+```
+
+Pasos del flujo:
+
+1. Mismas pre-condiciones que la notificación push: `status=APPROVED` y no es duplicado.
+2. El worker abre una **segunda sesión read-only** en la misma DB para resolver el viajero:
+   ```sql
+   SELECT "viajeroId" FROM reserva WHERE id = :booking_id
+   ```
+3. Si no existe la reserva o el `viajeroId` es null → se loguea y se omite el email (no se rompe el handler).
+4. Si todo va bien, se POST-ea el evento. Failures (timeout, 5xx) se loguean y siguen — el offset se commitea igual.
+
+Las **dos notificaciones (push + email) son independientes**: si la push falla, el email todavía intenta enviarse, y viceversa. El provider está hardcodeado a `"PROVIDER DE PRUEBA"` en [`app/services/email_notification_client.py`](app/services/email_notification_client.py).
 
 ## Ejecución local
 
@@ -195,6 +231,9 @@ Configurar en `Settings → Secrets and variables → Actions → Variables` (sc
 | `NOTIFICATION_SERVICE_URL`     | `https://notification-services-154299161799.us-central1.run.app`          |
 | `NOTIFICATION_SERVICE_PATH`    | `/api/v1/notifications/send-notification`                                 |
 | `NOTIFICATION_TIMEOUT_SECONDS` | timeout HTTP (default `5`)                                                |
+| `EMAIL_NOTIFICATION_ENABLED`   | `true` para emitir eventos `payment.completed` al pipeline de email       |
+| `EMAIL_NOTIFICATION_URL`       | `https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events` |
+| `EMAIL_NOTIFICATION_TIMEOUT_SECONDS` | timeout HTTP (default `5`)                                          |
 
 ### GitHub Actions Secrets
 

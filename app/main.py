@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
+from app.services.email_notification_client import HttpEmailNotificationClient
 from app.services.kafka_consumer import KafkaPaymentConsumer
 from app.services.notification_client import HttpNotificationClient
 from app.services.payment_event_handler import build_payment_event_handler
@@ -79,6 +80,22 @@ def _log_notification_config() -> None:
     )
 
 
+def _log_email_notification_config() -> None:
+    s = get_settings()
+    if not s.email_notification_enabled:
+        logger.warning(
+            "Email notification client DISABLED "
+            "(EMAIL_NOTIFICATION_ENABLED=false). "
+            "payment.completed events will be skipped."
+        )
+        return
+    logger.info(
+        "Email notification client ENABLED: url=%s timeout=%ss",
+        s.email_notification_url,
+        s.email_notification_timeout_seconds,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -91,8 +108,19 @@ async def lifespan(app: FastAPI):
         logger.exception("Notification client failed to start")
     app.state.notification_client = notifier
 
+    email_notifier = HttpEmailNotificationClient(settings)
+    try:
+        await email_notifier.start()
+    except Exception:
+        logger.exception("Email notification client failed to start")
+    app.state.email_notification_client = email_notifier
+
     handler = (
-        build_payment_event_handler(session_factory, notifier=notifier)
+        build_payment_event_handler(
+            session_factory,
+            notifier=notifier,
+            email_notifier=email_notifier,
+        )
         if session_factory is not None
         else _no_db_handler
     )
@@ -110,6 +138,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await consumer.stop()
+        await email_notifier.stop()
         await notifier.stop()
 
 
@@ -142,6 +171,7 @@ def create_app() -> FastAPI:
     _log_database_config()
     _log_kafka_config()
     _log_notification_config()
+    _log_email_notification_config()
 
     return app
 

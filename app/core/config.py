@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     notification_service_path: str = "/api/v1/notifications/send-notification"
     notification_timeout_seconds: float = 5.0
 
+    # Email notification (separate notification-services endpoint). Sends
+    # an event-shaped payload ``{event_type, user_id, payload{...}}`` so the
+    # receiver can dispatch it through the templated-email pipeline. Independent
+    # toggle so we can ship/rollback each notification channel separately.
+    email_notification_enabled: bool = False
+    email_notification_url: str = (
+        "https://notification-services-ridyy4wz4q-uc.a.run.app/api/v1/notifications/events"
+    )
+    email_notification_timeout_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

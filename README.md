@@ -97,6 +97,27 @@ Ver [.env.example](.env.example) para la lista completa.
 | `KAFKA_SASL_USERNAME`             | —                                    | Si SASL                                                            |
 | `KAFKA_SASL_PASSWORD`             | —                                    | Si SASL — desde Secret Manager en producción                       |
 | `KAFKA_RESTART_BACKOFF_SECONDS`   | `5.0`                                | Tras error inesperado en el consume loop                           |
+| `NOTIFICATION_ENABLED`            | `false`                              | Si `false`, las notificaciones booking-paid se omiten              |
+| `NOTIFICATION_SERVICE_URL`        | `https://notification-services-154299161799.us-central1.run.app` | Cloud Run sibling                            |
+| `NOTIFICATION_SERVICE_PATH`       | `/api/v1/notifications/send-notification` |                                                              |
+| `NOTIFICATION_TIMEOUT_SECONDS`    | `5`                                  | Timeout HTTP para la llamada                                       |
+
+## Notificación booking-paid
+
+Después de **persistir exitosamente** un pago con `status=APPROVED` (es decir, sólo cuando no es un duplicado y la pasarela aprobó la transacción), el worker hace un POST best-effort a:
+
+```
+POST {NOTIFICATION_SERVICE_URL}{NOTIFICATION_SERVICE_PATH}
+Content-Type: application/json
+
+{"booking_id": "<invoiceId del payload>", "status": "PAID"}
+```
+
+Reglas:
+
+- Sólo se dispara para `APPROVED`. `DECLINED`, `PENDING`, `FAILED` y `REFUNDED` no notifican.
+- **No** se vuelve a notificar en duplicados (re-entregas de Kafka): el repositorio retorna `None` y se omite la llamada para evitar notificar al usuario dos veces.
+- Es **best-effort**: si el notification service responde 5xx, hay timeout o falla la conexión, se loguea pero el offset igual se commitea — la DB ya tiene el pago como fuente de verdad.
 
 ## Ejecución local
 
@@ -170,6 +191,10 @@ Configurar en `Settings → Secrets and variables → Actions → Variables` (sc
 | `KAFKA_SASL_MECHANISM`         | si aplica                                                                 |
 | `KAFKA_SASL_USERNAME`          | si aplica                                                                 |
 | `KAFKA_SASL_PASSWORD_SECRET`   | **nombre del secreto** en Secret Manager (no el password en claro)        |
+| `NOTIFICATION_ENABLED`         | `true` para activar las notificaciones booking-paid                       |
+| `NOTIFICATION_SERVICE_URL`     | `https://notification-services-154299161799.us-central1.run.app`          |
+| `NOTIFICATION_SERVICE_PATH`    | `/api/v1/notifications/send-notification`                                 |
+| `NOTIFICATION_TIMEOUT_SECONDS` | timeout HTTP (default `5`)                                                |
 
 ### GitHub Actions Secrets
 

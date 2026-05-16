@@ -139,3 +139,109 @@ async def test_handler_persists_refunded_with_minimal_fields(patch_repo) -> None
     assert saved.invoiceId == "INV-9"
     assert saved.transactionId is None
     assert saved.amount is None
+
+
+# ----- Notification client wiring -----
+
+
+class FakeNotifier:
+    def __init__(self, return_value: bool = True, raises: bool = False) -> None:
+        self.calls: list[str] = []
+        self.return_value = return_value
+        self.raises = raises
+
+    async def notify_booking_paid(self, booking_id: str) -> bool:
+        self.calls.append(booking_id)
+        if self.raises:
+            raise RuntimeError("notifier exploded")
+        return self.return_value
+
+
+async def test_handler_notifies_when_approved_payment_persisted(patch_repo) -> None:
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier()
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    payload = _payload()  # APPROVED, invoiceId=INV-1
+    await handler(payload)
+
+    assert notifier.calls == ["INV-1"]
+
+
+async def test_handler_does_not_notify_when_duplicate(patch_duplicate_repo) -> None:
+    """Re-delivery of the same APPROVED event must not double-notify."""
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier()
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    await handler(_payload())  # repository returns None (duplicate)
+
+    assert notifier.calls == []
+
+
+async def test_handler_does_not_notify_on_declined(patch_repo) -> None:
+    declined = PaymentWebhookPayload(
+        status=PaymentWebhookStatus.DECLINED,
+        message="rejected",
+        invoiceId="INV-2",
+        amount=Decimal("10.00"),
+        currency="COP",
+        cardHolder="X",
+        maskedCard="**** **** **** 0000",
+        transactionId="TX-DEC",
+        processedAt=datetime(2026, 5, 2, 18, 13, 14, tzinfo=timezone.utc),
+    )
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier()
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    await handler(declined)
+
+    assert notifier.calls == []
+
+
+async def test_handler_does_not_notify_on_refunded(patch_repo) -> None:
+    refund = PaymentWebhookPayload(
+        status=PaymentWebhookStatus.REFUNDED,
+        message="Reembolso emitido",
+        invoiceId="INV-9",
+    )
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier()
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    await handler(refund)
+
+    assert notifier.calls == []
+
+
+async def test_handler_swallows_notification_exceptions(patch_repo, caplog) -> None:
+    """A buggy notifier must not bubble up — offset must still commit."""
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier(raises=True)
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    # Should NOT raise even though notifier does.
+    await handler(_payload())
+
+    assert notifier.calls == ["INV-1"]
+    assert any(
+        "notification raised unexpectedly" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+async def test_handler_logs_warning_when_notification_returns_false(
+    patch_repo, caplog
+) -> None:
+    factory = FakeSessionFactory()
+    notifier = FakeNotifier(return_value=False)
+    handler = handler_module.build_payment_event_handler(factory, notifier=notifier)
+
+    await handler(_payload())
+
+    assert notifier.calls == ["INV-1"]
+    assert any(
+        "booking-paid notification failed" in r.getMessage()
+        for r in caplog.records
+    )

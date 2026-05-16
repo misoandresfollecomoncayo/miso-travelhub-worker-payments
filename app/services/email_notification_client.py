@@ -59,15 +59,32 @@ class HttpEmailNotificationClient:
                 "payment.completed events will be skipped."
             )
             return
+
+        # The token is shared with the notification-services events endpoint.
+        # Without it the receiver will reject the request with 401, so log
+        # loud if it's missing — the call will still go out (and fail) so
+        # the operator notices.
+        token = self._settings.email_notification_internal_token.strip()
+        headers: dict[str, str] = {}
+        if token:
+            headers["x-internal-token"] = token
+        else:
+            logger.warning(
+                "EMAIL_NOTIFICATION_INTERNAL_TOKEN is empty — "
+                "the receiver will likely reject the request"
+            )
+
         # The configured URL is the full endpoint (host + path) — we just
         # POST to it directly, no base_url juggling.
         self._client = httpx.AsyncClient(
             timeout=self._settings.email_notification_timeout_seconds,
+            headers=headers,
         )
         logger.info(
-            "Email notification client started url=%s timeout=%ss",
+            "Email notification client started url=%s timeout=%ss token=%s",
             self._settings.email_notification_url,
             self._settings.email_notification_timeout_seconds,
+            "set" if token else "MISSING",
         )
 
     async def stop(self) -> None:
